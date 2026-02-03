@@ -1,0 +1,1496 @@
+/*
+ATURAN MENGGUNAKAN KODE:
+1. Jalakan kode sesuai dengan function yang dipilih (sebelah kanan Debug)
+2. Terdapat ID Spreadsheet dan nama Sheet yang dapat disesuaikan pada semua function pindahkanData...()
+3. Setiap function pindahkanData...() sudah otomatis menjalankan function transferDataToRekapJob()
+4. Jika poin 3 ragu, silahkan jalankan function transferDataToRekapJob() dengan manual
+5. Function yang diberi nomor 01 02 dan 03 adalah function yang WAJIB dijalankan dengan urut dan manual.
+6. Nama sheet tujuan pada function sortirNama...() dan totalkanPoin...() WAJIB DIUBAH
+7. Function totalkanPoin...() dijalankan ketika data kru LENGKAP termasuk rekap General Affair
+*/
+
+// TRIGGER (OPSIONAL)
+function doGet(e) {
+  const type = e.parameter.type; // Parameter yang menunjukkan jenis form
+
+  if (type === "news") {
+    pindahkanDataNews();
+  } else if (type === "non-news") {
+    pindahkanDataNonNews();
+  } else if (type === "live") {
+    pindahkanDataLive();
+  } else {
+    return ContentService.createTextOutput("Parameter type tidak valid.");
+  }
+
+  return ContentService.createTextOutput("Data berhasil diproses.");
+}
+
+// MASUKKAN DATA KE SHEET REKAP NEWS (Versi Aman + Kolom Total & ID Peminjaman Alat)
+function pindahkanDataNews() {
+  // ID spreadsheet dan sheet WAJIB DISESUAIKAN
+  const responseSpreadsheetId = "12cRayvpcOlawO7acFvkYF9lMrHKbvKE-czo7zIMizTE"; // SPS Response News
+  const responseSheetName = "Form Responses 1"; // Ganti sesuai dengan nama sheet SPS Response News
+  const rekapSpreadsheetId = "1y7cQXmVa0axRGs3Mbip_cUdavO3Ej0bvVX8QAkigGNE"; // SPS Rekap
+  const rekapSheetName = "REKAP NEWS"; // Ganti sesuai dengan nama sheet SPS Rekap
+
+  Logger.log("Mulai proses pindahkanDataNews untuk SPS Response News...");
+
+  // Buka spreadsheet dan sheet
+  const responseSpreadsheet = SpreadsheetApp.openById(responseSpreadsheetId);
+  const rekapSpreadsheet = SpreadsheetApp.openById(rekapSpreadsheetId);
+  const responseSheet = responseSpreadsheet.getSheetByName(responseSheetName);
+  const rekapSheet = rekapSpreadsheet.getSheetByName(rekapSheetName);
+
+  if (!responseSheet) throw new Error(`Sheet SPS Response News '${responseSheetName}' tidak ditemukan.`);
+  if (!rekapSheet) throw new Error(`Sheet SPS Rekap '${rekapSheetName}' tidak ditemukan.`);
+
+  // Ambil data dari SPS Response News
+  const responseData = responseSheet.getDataRange().getValues();
+  const responseHeader = responseData[0];
+  const responseRows = responseData.slice(1);
+
+  Logger.log(`Ditemukan ${responseRows.length} baris data di SPS Response News.`);
+
+  // Kolom penting di SPS Response News
+  const jobRoles = ["Presenter", "Campers", "Editor"];
+
+  // Ambil header dari SPS Rekap
+  const rekapHeader = rekapSheet.getRange(1, 1, 1, rekapSheet.getLastColumn()).getValues()[0];
+
+  // Ambil data yang sudah ada di SPS Rekap
+  const rekapData = rekapSheet.getRange(2, 1, rekapSheet.getLastRow() - 1, rekapSheet.getLastColumn()).getValues();
+  const existingEntries = new Set(
+    rekapData.map(row =>
+      `${row[rekapHeader.indexOf("Nama Kru")]}|${row[rekapHeader.indexOf("Tanggal Masuk")]}|${row[rekapHeader.indexOf("Jenis JOB")]}|${row[rekapHeader.indexOf("Judul Video/Job")]}`
+    )
+  );
+
+  // Cari indeks kolom penting di response
+  const tanggalIndex = responseHeader.indexOf("Tanggal Produksi");
+  const judulIndex = responseHeader.indexOf("Judul Berita");
+  const linkIndex = responseHeader.indexOf("Link YouTube");
+  const idPeminjamanIndex = responseHeader.indexOf("ID Peminjaman Alat"); // field baru
+
+  // Cari indeks kolom penting di rekap
+  const rekapNamaIndex = rekapHeader.indexOf("Nama Kru");
+  const rekapTanggalIndex = rekapHeader.indexOf("Tanggal Masuk");
+  const rekapJudulIndex = rekapHeader.indexOf("Judul Video/Job");
+  const rekapLinkIndex = rekapHeader.indexOf("Link Youtube");
+  const rekapProgramIndex = rekapHeader.indexOf("Program");
+  const rekapJobIndex = rekapHeader.indexOf("Jenis JOB");
+  const rekapPoinIndex = rekapHeader.indexOf("Poin");
+  const rekapIdPeminjamanIndex = rekapHeader.indexOf("ID Peminjaman Alat");
+
+  // Cari semua baris kosong berdasarkan kolom utama
+  const emptyRows = [];
+  rekapData.forEach((row, i) => {
+    const isRowEmpty =
+      !row[rekapNamaIndex] &&
+      !row[rekapTanggalIndex] &&
+      !row[rekapJudulIndex] &&
+      (!row[rekapLinkIndex] || row[rekapLinkIndex] === "") &&
+      (!row[rekapProgramIndex] || row[rekapProgramIndex] === "") &&
+      (!row[rekapJobIndex] || row[rekapJobIndex] === "");
+    if (isRowEmpty) emptyRows.push(i + 2);
+  });
+
+  // Proses data SPS Response News
+  const rekapResult = [];
+  responseRows.forEach(row => {
+    const tanggal = row[tanggalIndex];
+    const judul = row[judulIndex];
+    const link = row[linkIndex];
+    const idPeminjaman = idPeminjamanIndex >= 0 ? row[idPeminjamanIndex] : "";
+
+    jobRoles.forEach(jobRole => {
+      const jobNameIndex = responseHeader.indexOf(jobRole);
+      const namaKru = row[jobNameIndex];
+
+      if (namaKru) {
+        const uniqueID = `${namaKru}|${tanggal}|${jobRole}|${judul}`;
+
+        if (!existingEntries.has(uniqueID)) {
+          const entry = [];
+          entry[rekapNamaIndex] = namaKru;
+          entry[rekapTanggalIndex] = tanggal;
+          entry[rekapJudulIndex] = judul;
+          entry[rekapLinkIndex] = link;
+          entry[rekapProgramIndex] = "News";
+          entry[rekapJobIndex] = jobRole;
+          entry[rekapPoinIndex] = ""; // akan diisi formula nanti
+          entry[rekapIdPeminjamanIndex] = idPeminjaman || "";
+
+          rekapResult.push(entry);
+          existingEntries.add(uniqueID);
+          Logger.log(`Menambahkan data baru: ${uniqueID}`);
+        }
+      }
+    });
+  });
+
+  Logger.log(`Total ${rekapResult.length} baris data baru akan ditambahkan.`);
+
+  // Tambahkan data ke SPS Rekap
+  if (rekapResult.length > 0) {
+    rekapResult.forEach((row, index) => {
+      const targetRow = emptyRows[index] || rekapSheet.getLastRow() + 1;
+
+      // Urutan data sesuai struktur sheet
+      const dataToWrite = [
+        row[rekapNamaIndex] || "",
+        row[rekapTanggalIndex] || "",
+        row[rekapJudulIndex] || "",
+        row[rekapLinkIndex] || "",
+        row[rekapProgramIndex] || "",
+        row[rekapJobIndex] || "",
+        // Kolom Poin (formula otomatis)
+        `=ifna(VLOOKUP((CONCATENATE(F${targetRow}:G${targetRow}));Acuan!$I$2:$J$238;2;False);"0")`,
+        // Kolom ID Peminjaman Alat (auto dari form kalau ada)
+        row[rekapIdPeminjamanIndex] || ""
+      ];
+
+      rekapSheet.getRange(targetRow, 2, 1, dataToWrite.length).setValues([dataToWrite]);
+    });
+
+    Logger.log("Data baru berhasil ditambahkan.");
+  } else {
+    Logger.log("Tidak ada data baru untuk ditambahkan.");
+  }
+}
+
+
+
+// MASUKKAN DATA KE SHEET REKAP NON NEWS (Versi Final Aman + Fix Kolom Judul)
+function pindahkanDataNonNews() {
+  const responseSpreadsheetId = "1HV4Qs6TNfHGHmS5b-eyrp9u4-rFq0_oWG1szVCO-5_w"; // SPS Response Non-News
+  const responseSheetName = "Form Responses 1";
+  const rekapSpreadsheetId = "1y7cQXmVa0axRGs3Mbip_cUdavO3Ej0bvVX8QAkigGNE"; // SPS Rekap
+  const rekapSheetName = "REKAP NON NEWS";
+
+  Logger.log("Mulai proses pindahkanDataNonNews...");
+
+  const responseSpreadsheet = SpreadsheetApp.openById(responseSpreadsheetId);
+  const rekapSpreadsheet = SpreadsheetApp.openById(rekapSpreadsheetId);
+  const responseSheet = responseSpreadsheet.getSheetByName(responseSheetName);
+  const rekapSheet = rekapSpreadsheet.getSheetByName(rekapSheetName);
+
+  if (!responseSheet) throw new Error(`Sheet '${responseSheetName}' tidak ditemukan.`);
+  if (!rekapSheet) throw new Error(`Sheet '${rekapSheetName}' tidak ditemukan.`);
+
+  // Ambil data dari response
+  const responseData = responseSheet.getDataRange().getValues();
+  const responseHeader = responseData[0];
+  const responseRows = responseData.slice(1);
+
+  // Kolom penting di response
+  const tanggalIndex = responseHeader.indexOf("Tanggal Produksi");
+  const programIndex = responseHeader.indexOf("Program");
+  const linkIndex = responseHeader.indexOf("Link Youtube");
+  const idPeminjamanIndex = responseHeader.indexOf("ID Peminjaman Alat");
+
+  // ✅ Cari kolom Judul (lebih fleksibel)
+  const judulIndex = responseHeader.findIndex(h =>
+    h.toString().toLowerCase().trim() === "judul" ||
+    h.toString().toLowerCase().includes("judul video") ||
+    h.toString().toLowerCase().includes("judul")
+  );
+
+  if (judulIndex === -1) {
+    throw new Error(
+      "Kolom 'Judul' tidak ditemukan di response form. Pastikan nama header mengandung kata 'Judul'."
+    );
+  }
+
+  Logger.log(`Kolom 'Judul' ditemukan di index: ${judulIndex}, header aslinya: '${responseHeader[judulIndex]}'`);
+
+  // Kolom Kru dan Jobdesk
+  const kruStartIndex = responseHeader.indexOf("Kru 1");
+  const jobdeskStartIndex = responseHeader.indexOf("Jobdesk Kru 1");
+  const numKruColumns = 20;
+
+  // Ambil header rekap
+  const rekapHeader = rekapSheet.getRange(1, 1, 1, rekapSheet.getLastColumn()).getValues()[0];
+  const rekapNamaIndex = rekapHeader.indexOf("Nama Kru");
+  const rekapTanggalIndex = rekapHeader.indexOf("Tanggal Masuk");
+  const rekapJudulIndex = rekapHeader.indexOf("Judul Video/Job");
+  const rekapLinkIndex = rekapHeader.indexOf("Link Youtube");
+  const rekapProgramIndex = rekapHeader.indexOf("Program");
+  const rekapJobIndex = rekapHeader.indexOf("Jenis JOB");
+  const rekapIdPeminjamanIndex = rekapHeader.indexOf("ID Peminjaman Alat");
+
+  const lastRow = rekapSheet.getLastRow();
+  const rekapData =
+    lastRow > 1
+      ? rekapSheet.getRange(2, 1, lastRow - 1, rekapHeader.length).getValues()
+      : [];
+
+  const existingEntries = new Set(
+    rekapData.map(row =>
+      `${row[rekapNamaIndex]}|${row[rekapTanggalIndex]}|${row[rekapJudulIndex]}|${row[rekapProgramIndex]}|${row[rekapJobIndex]}`
+    )
+  );
+
+  // Cari baris kosong
+  const emptyRows = [];
+  rekapData.forEach((row, i) => {
+    const isRowEmpty =
+      !row[rekapTanggalIndex] &&
+      !row[rekapJudulIndex] &&
+      (!row[rekapLinkIndex] || row[rekapLinkIndex] === "") &&
+      (!row[rekapProgramIndex] || row[rekapProgramIndex] === "") &&
+      (!row[rekapJobIndex] || row[rekapJobIndex] === "");
+    if (isRowEmpty) emptyRows.push(i + 2);
+  });
+
+  Logger.log(`Ditemukan ${emptyRows.length} baris kosong di REKAP NON NEWS.`);
+
+  const rekapResult = [];
+  responseRows.forEach(row => {
+    const tanggal = row[tanggalIndex];
+    const program = row[programIndex];
+    const link = row[linkIndex];
+    const judul = row[judulIndex];
+    const idPeminjaman = idPeminjamanIndex >= 0 ? row[idPeminjamanIndex] : "";
+
+    for (let i = 0; i < numKruColumns; i++) {
+      const kruIndex = kruStartIndex + i * 2;
+      const jobdeskIndex = jobdeskStartIndex + i * 2;
+      const namaKru = row[kruIndex];
+      const jobdesk = row[jobdeskIndex];
+
+      if (namaKru && jobdesk) {
+        const jobs = jobdesk.split(",").map(j => j.trim());
+        jobs.forEach(job => {
+          const uniqueID = `${namaKru}|${tanggal}|${judul}|${program}|${job}`;
+          if (!existingEntries.has(uniqueID)) {
+            const entry = [];
+            entry[rekapNamaIndex] = namaKru;
+            entry[rekapTanggalIndex] = tanggal;
+            entry[rekapJudulIndex] = judul;
+            entry[rekapLinkIndex] = link;
+            entry[rekapProgramIndex] = program;
+            entry[rekapJobIndex] = job;
+            entry[rekapIdPeminjamanIndex] = idPeminjaman || "";
+
+            rekapResult.push(entry);
+            existingEntries.add(uniqueID);
+          }
+        });
+      }
+    }
+  });
+
+  if (rekapResult.length > 0) {
+    Logger.log(`Menambahkan ${rekapResult.length} baris data baru ke REKAP NON NEWS...`);
+
+    rekapResult.forEach((row, index) => {
+      const targetRow = emptyRows[index] || rekapSheet.getLastRow() + 1;
+      const out = new Array(rekapHeader.length - 1).fill("");
+
+      out[rekapNamaIndex - 1] = row[rekapNamaIndex] || "";
+      out[rekapTanggalIndex - 1] = row[rekapTanggalIndex] || "";
+      out[rekapJudulIndex - 1] = row[rekapJudulIndex] || "";
+      out[rekapLinkIndex - 1] = row[rekapLinkIndex] || "";
+      out[rekapProgramIndex - 1] = row[rekapProgramIndex] || "";
+      out[rekapJobIndex - 1] = row[rekapJobIndex] || "";
+
+      if (rekapIdPeminjamanIndex >= 0) {
+        out[rekapIdPeminjamanIndex - 1] = row[rekapIdPeminjamanIndex] || "";
+      }
+
+      rekapSheet.getRange(targetRow, 2, 1, out.length).setValues([out]);
+
+      if (rekapSheet.getRange(targetRow, 1).isBlank()) {
+        rekapSheet.getRange(targetRow, 1).setFormula("=ROW()");
+      }
+
+      const poinFormula = `=ifna(VLOOKUP((CONCATENATE(F${targetRow}:G${targetRow}));Acuan!$I$2:$J$300;2;False);"0")`;
+      rekapSheet.getRange(targetRow, 8).setFormula(poinFormula);
+    });
+
+    Logger.log("✅ Data berhasil ditambahkan ke REKAP NON NEWS tanpa duplikasi & kolom aman.");
+  } else {
+    Logger.log("Tidak ada data baru untuk ditambahkan ke REKAP NON NEWS.");
+  }
+}
+
+// MASUKKAN DATA KE SHEET REKAP LIVE
+function pindahkanDataLive() {
+  const responseSpreadsheetId = "1hvVC_VxYZnJD1eOmIW1aIe3ZuzBSO6m1u8rIeMUydh4"; // SPS Response Live
+  const responseSheetName = "Form Responses 1";
+  const rekapSpreadsheetId = "1y7cQXmVa0axRGs3Mbip_cUdavO3Ej0bvVX8QAkigGNE"; // SPS Rekap
+  const rekapSheetName = "REKAP LIVE";
+
+  const responseSpreadsheet = SpreadsheetApp.openById(responseSpreadsheetId);
+  const rekapSpreadsheet = SpreadsheetApp.openById(rekapSpreadsheetId);
+
+  const responseSheet = responseSpreadsheet.getSheetByName(responseSheetName);
+  const rekapSheet = rekapSpreadsheet.getSheetByName(rekapSheetName);
+
+  if (!responseSheet) throw new Error(`Sheet '${responseSheetName}' tidak ditemukan.`);
+  if (!rekapSheet) throw new Error(`Sheet '${rekapSheetName}' tidak ditemukan.`);
+
+  const responseData = responseSheet.getDataRange().getValues();
+  const responseHeader = responseData[0];
+  const responseRows = responseData.slice(1);
+
+  if (responseRows.length === 0) {
+    Logger.log("Tidak ada data pada sheet response.");
+    return ContentService.createTextOutput("Sheet response kosong, tidak ada data yang diproses.");
+  }
+
+  const rekapHeader = rekapSheet.getRange(1, 1, 1, rekapSheet.getLastColumn()).getValues()[0];
+  const lastRow = rekapSheet.getLastRow();
+  const rekapData = lastRow > 1
+    ? rekapSheet.getRange(2, 1, lastRow - 1, rekapHeader.length).getValues()
+    : [];
+
+  const existingEntries = new Set(
+    rekapData.map(row => JSON.stringify({
+      namaKru: row[rekapHeader.indexOf("Nama Kru")],
+      tanggal: row[rekapHeader.indexOf("Tanggal Masuk")],
+      judul: row[rekapHeader.indexOf("Judul Video/Job")],
+      link: row[rekapHeader.indexOf("Link Youtube")],
+      program: row[rekapHeader.indexOf("Program")],
+      job: row[rekapHeader.indexOf("Jenis JOB")]
+    }))
+  );
+
+  const jobdeskMapping = {
+    "PJ LIVE": "PJ LIVE",
+    "PD": "PD",
+    "FD": "FD",
+    "SD": "SD",
+    "Cam 1": "Cam LIVE",
+    "Cam 2": "Cam LIVE",
+    "Cam 3": "Cam LIVE",
+    "Cam 4": "Cam LIVE",
+    "Cam 5": "Cam LIVE",
+    "Cam 6": "Cam LIVE",
+    "Asscam 1": "Asscam LIVE",
+    "Asscam 2": "Asscam LIVE",
+    "Asscam 3": "Asscam LIVE",
+    "Asscam 4": "Asscam LIVE",
+    "Asscam 5": "Asscam LIVE",
+    "Vmix Live 1": "Vmix Live",
+    "Vmix Live 2": "Vmix Live",
+    "Vmix Video 1": "Vmix Video",
+    "Vmix Video 2": "Vmix Video",
+    "Matador": "Matador",
+    "Switcher": "Switcher",
+    "VJ": "VJ",
+    "DJ": "DJ",
+    "Runner 1": "Runner",
+    "Runner 2": "Runner",
+    "Runner 3": "Runner",
+    "Teknisi 1": "Teknisi LIVE",
+    "Teknisi 2": "Teknisi LIVE",
+    "Teknisi 3": "Teknisi LIVE",
+    "Dokumentasi": "Dokumentasi",
+    "Zoom": "Zoom LIVE"
+  };
+
+  // Cari semua baris kosong
+  const emptyRows = [];
+  rekapData.forEach((row, index) => {
+    const isRowEmpty = !row[rekapHeader.indexOf("Tanggal Masuk")] &&
+                       !row[rekapHeader.indexOf("Judul Video/Job")] &&
+                       (!row[rekapHeader.indexOf("Link Youtube")] || row[rekapHeader.indexOf("Link Youtube")] === "") &&
+                       (!row[rekapHeader.indexOf("Program")] || row[rekapHeader.indexOf("Program")] === "") &&
+                       (!row[rekapHeader.indexOf("Jenis JOB")] || row[rekapHeader.indexOf("Jenis JOB")] === "");
+    if (isRowEmpty) {
+      emptyRows.push(index + 2); // Baris kosong di bawah header
+    }
+  });
+
+  const rekapResult = [];
+  responseRows.forEach(row => {
+    const tanggal = row[responseHeader.indexOf("Tanggal Live")];
+    const judul = row[responseHeader.indexOf("Nama Live")];
+    const link = row[responseHeader.indexOf("Link Youtube")];
+
+    Object.keys(jobdeskMapping).forEach(jobdeskKey => {
+      const jobdeskIndex = responseHeader.indexOf(jobdeskKey);
+      const namaKru = row[jobdeskIndex];
+
+      if (namaKru) {
+        const jobdesk = jobdeskMapping[jobdeskKey];
+        const entryObject = {
+          namaKru: namaKru,
+          tanggal: tanggal,
+          judul: judul,
+          link: link,
+          program: "LIVE",
+          job: jobdesk
+        };
+
+        if (!existingEntries.has(JSON.stringify(entryObject))) {
+          const entry = Array(rekapHeader.length).fill("");
+          entry[rekapHeader.indexOf("Nama Kru")] = namaKru;
+          entry[rekapHeader.indexOf("Tanggal Masuk")] = tanggal;
+          entry[rekapHeader.indexOf("Judul Video/Job")] = judul;
+          entry[rekapHeader.indexOf("Link Youtube")] = link;
+          entry[rekapHeader.indexOf("Program")] = "LIVE";
+          entry[rekapHeader.indexOf("Jenis JOB")] = jobdesk;
+
+          rekapResult.push(entry);
+          existingEntries.add(JSON.stringify(entryObject));
+        }
+      }
+    });
+  });
+
+  if (rekapResult.length > 0) {
+    rekapResult.forEach((row, index) => {
+      const targetRow = emptyRows[index] || (rekapSheet.getLastRow() + 1);
+      const dataToWrite = row.slice(1);
+
+      while (dataToWrite.length < rekapHeader.length - 1) {
+        dataToWrite.push("");
+      }
+
+      rekapSheet.getRange(targetRow, 2, 1, rekapHeader.length - 1).setValues([dataToWrite]);
+
+      if (rekapSheet.getRange(targetRow, 1).isBlank()) {
+        rekapSheet.getRange(targetRow, 1).setFormula(`=ROW()`);
+      }
+
+      const queryFormula = `=ifna(VLOOKUP((CONCATENATE(F${targetRow}:G${targetRow}));Acuan!$I$2:$J$300;2;False);"0")`;
+      rekapSheet.getRange(targetRow, 8).setFormula(queryFormula);
+    });
+    Logger.log("Data berhasil ditambahkan ke SPS Rekap.");
+    
+    /* // Hilangkan comment jika ingin trigger
+    Logger.log("Memanggil transferDataToRekapJob...");
+    transferDataToRekapJob(); */
+
+  } else {
+    Logger.log("Tidak ada data baru untuk ditambahkan ke SPS Rekap.");
+  }
+}
+
+function pindahkanDataGA() {
+  // ===============================
+  // KONFIGURASI
+  // ===============================
+  const responseSpreadsheetId = "15bR7FELCjJygiA4hdGZ2k8E-T1AoBUy-IcDdGI1XWOI"; // SPS Response GA
+  const responseSheetName = "Form Responses 1";
+
+  const rekapSpreadsheetId = "1y7cQXmVa0axRGs3Mbip_cUdavO3Ej0bvVX8QAkigGNE"; // SPS Rekap Poin
+  const rekapSheetName = "REKAP GA";
+
+  Logger.log("🚀 Mulai proses pindahkanDataGA...");
+
+  // ===============================
+  // OPEN SHEET
+  // ===============================
+  const responseSheet = SpreadsheetApp.openById(responseSpreadsheetId).getSheetByName(responseSheetName);
+  const rekapSheet = SpreadsheetApp.openById(rekapSpreadsheetId).getSheetByName(rekapSheetName);
+
+  if (!responseSheet) throw new Error("Sheet Response GA tidak ditemukan.");
+  if (!rekapSheet) throw new Error("Sheet REKAP GA tidak ditemukan.");
+
+  // ===============================
+  // AMBIL DATA RESPONSE
+  // ===============================
+  const responseData = responseSheet.getDataRange().getValues();
+  const responseHeader = responseData[0];
+  const responseRows = responseData.slice(1);
+
+  Logger.log(`📥 ${responseRows.length} baris data ditemukan di Response GA`);
+
+  // ===============================
+  // AMBIL HEADER REKAP
+  // ===============================
+  const rekapHeader = rekapSheet.getRange(1, 1, 1, rekapSheet.getLastColumn()).getValues()[0];
+  const rekapData = rekapSheet.getRange(2, 1, Math.max(rekapSheet.getLastRow() - 1, 0), rekapSheet.getLastColumn()).getValues();
+
+  // ===============================
+  // INDEX RESPONSE
+  // ===============================
+  const idxNama = responseHeader.indexOf("Nama Kru");
+  const idxProgram = responseHeader.indexOf("Program");
+  const idxJobdesk = responseHeader.indexOf("Jobdesk");
+  const idxTanggal = responseHeader.indexOf("Tanggal Pengerjaan");
+  const idxLink = responseHeader.indexOf("Tautan Informasi (Opsional)");
+  const idxPeminjaman = responseHeader.indexOf("ID Peminjaman");
+
+  // ===============================
+  // INDEX REKAP
+  // ===============================
+  const rNama = rekapHeader.indexOf("Nama Kru");
+  const rTanggal = rekapHeader.indexOf("Tanggal Masuk");
+  const rJudul = rekapHeader.indexOf("Judul Video/Job");
+  const rLink = rekapHeader.indexOf("Link Youtube");
+  const rProgram = rekapHeader.indexOf("Program");
+  const rJob = rekapHeader.indexOf("Jenis JOB");
+  const rPoin = rekapHeader.indexOf("Poin");
+  const rPeminjaman = rekapHeader.indexOf("ID Peminjaman Alat");
+
+  // ===============================
+  // EXISTING DATA (ANTI DUPLIKASI)
+  // ===============================
+  const existingEntries = new Set(
+    rekapData.map(row =>
+      `${row[rNama]}|${row[rTanggal]}|${row[rJob]}|${row[rJudul]}`
+    )
+  );
+
+  // ===============================
+  // CARI BARIS KOSONG
+  // ===============================
+  const emptyRows = [];
+  rekapData.forEach((row, i) => {
+    const isEmpty =
+      !row[rNama] &&
+      !row[rTanggal] &&
+      !row[rJudul] &&
+      !row[rProgram] &&
+      !row[rJob];
+    if (isEmpty) emptyRows.push(i + 2);
+  });
+
+  // ===============================
+  // PROSES ETL
+  // ===============================
+  const result = [];
+
+  responseRows.forEach(row => {
+    const nama = row[idxNama];
+    const program = row[idxProgram];
+    const jobdesk = row[idxJobdesk];
+    const tanggal = row[idxTanggal];
+    const link = row[idxLink];
+    const idPinjam = row[idxPeminjaman];
+
+    if (!nama || !jobdesk || !tanggal) return;
+
+    const judul = `${program} - ${jobdesk}`;
+    const uniqueKey = `${nama}|${tanggal}|${jobdesk}|${judul}`;
+
+    if (!existingEntries.has(uniqueKey)) {
+      const entry = [];
+      entry[rNama] = nama;
+      entry[rTanggal] = tanggal;
+      entry[rJudul] = judul;
+      entry[rLink] = link || "";
+      entry[rProgram] = program;
+      entry[rJob] = jobdesk;
+      entry[rPeminjaman] = idPinjam || "";
+
+      result.push(entry);
+      existingEntries.add(uniqueKey);
+      Logger.log(`➕ Data ditambahkan: ${uniqueKey}`);
+    }
+  });
+
+  Logger.log(`📊 Total ${result.length} data GA baru`);
+
+  // ===============================
+  // WRITE KE SHEET
+  // ===============================
+  result.forEach((row, i) => {
+    const targetRow = emptyRows[i] || rekapSheet.getLastRow() + 1;
+
+    const values = [
+      row[rNama] || "",
+      row[rTanggal] || "",
+      row[rJudul] || "",
+      row[rLink] || "",
+      row[rProgram] || "",
+      row[rJob] || "",
+      `=IFNA(VLOOKUP(CONCATENATE(F${targetRow}:G${targetRow});Acuan!$I$2:$J$999;2;FALSE);"0")`,
+      row[rPeminjaman] || ""
+    ];
+
+    // Mulai kolom B (karena kolom A = ID auto)
+    rekapSheet.getRange(targetRow, 2, 1, values.length).setValues([values]);
+  });
+
+  Logger.log("✅ ETL GA selesai tanpa error");
+}
+
+// WAJIB URUT
+// 01. TRANSFER DATA KE SHEET REKAP JOB
+function transferDataToRekapJob() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  // Nama sheet
+  const sourceSheets = ["REKAP NEWS", "REKAP NON NEWS", "REKAP LIVE"];
+  const targetSheetName = "REKAP JOB";
+
+  // Ambil sheet tujuan (REKAP JOB)
+  const targetSheet = ss.getSheetByName(targetSheetName);
+  if (!targetSheet) {
+    throw new Error(`Sheet "${targetSheetName}" tidak ditemukan.`);
+  }
+
+  // Ambil batas pemisah angkatan
+  const separators = {
+    E20: targetSheet.createTextFinder("E20").findNext().getRow(),
+    E19: targetSheet.createTextFinder("E19").findNext().getRow(),
+    E18: targetSheet.createTextFinder("E18").findNext().getRow(),
+    E17: targetSheet.createTextFinder("E17").findNext().getRow(),
+  };
+
+  // Daftar nama kru per angkatan
+  const angkatanKru = {
+    E20: [
+      "Adrian Maulana Syaval Putra Triar",
+      "Ahmad Nayottama Juliansyah",
+      "Aldymas Nauval Saputra",
+      "Amartha Kirania Cahaya Putri",
+      "Aqeela Chessa Nurcahyo",
+      "Athalia Qothrunnadah Nazhifah",
+      "Ayu Dwi Iko Sita",
+      "Caesar Ryan Ahmadyani",
+      "Daffa Rafidan Alim",
+      "Erlita Putri Febyanti",
+      "Farrel Aryasatya Raharjo",
+      "Ferlin Erdina Sari",
+      "Gahara Syahbani Limarianto Putra",
+      "Hanania Kirei Pintowantoro",
+      "Inayatul Zakiya Istiqomah",
+      "Izyankareem Retrofi Ranuwiehan",
+      "Janu Aisyah",
+      "Keanu Mikhail Farras Satriawan",
+      "Khilmi Ulin Nuha",
+      "KR.Raihan Narantaka Alief Wardana",
+      "Lubna Nuurillah Radiah Saraswati",
+      "Marvel Graziano Kunarwoko",
+      "Monix Denar Adistiyono",
+      "Muhammad Aymannafi",
+      "Muhammad Hafi Sulistyo",
+      "Muhammad Iqbal Lazuardi",
+      "Mulia Nirmalasari",
+      "Nabil Faiz Fadillah",
+      "Ni Luh Putu Raina Pradnya Pramesty",
+      "Rajendra Abrar Arganta Wibowo",
+      "Rayan Rajendra Rasendriya",
+      "Reynaldi Chandra",
+      "Roshelly Anggita Ramadhani",
+      "Sa’ad Musaid",
+      "Sagita Rizki Ramadhani",
+      "Valeksiano Sidjabat",
+      "Valencia Benita Adiana",
+      "Waldan Hafizh",
+      "Yesenia Valencia Wibowo",
+    ],
+    E19: [
+      "Abdul Fattah Ali",
+      "Alfin Hadi Komarudin",
+      "Ananda Fitri Wibowo",
+      "Andhika Putra Pratama",
+      "Arvina Nurul Firmala",
+      "Athira Zahra Adini",
+      "Axl Priyangga Maheswara",
+      "Chenata Andara Imansyah",
+      "Difta Raditya Pratama",
+      "Fakhri Rafif Fawwaz",
+      "Farid Nadi Al Farisi",
+      "Hafiz Arief",
+      "Ibrahim Ferel",
+      "Istianatul Latifah",
+      "Jylan Annisa Mumtaza Syidana",
+      "Khoirun Nisa",
+      "Muhammad Ardiansyah Tri WIbowo",
+      "Muhammad Imren Firdy Averouz",
+      "Nafis Nabila Karimani",
+      "Ni'mah Fauziyyah Atok",
+      "Novansyah Putra Ramadhani",
+      "Rayhan Agnan Kusuma",
+      "Razeh Nurebikasyahaq",
+      "Samuel Hideaki Tangke Arung",
+      "Sandy Prastyawan Nugraha",
+      "Tsany Deni Mahardika",
+    ],
+    E18: [
+      "Aiman Ahmad Oetarto",
+      "Akhmad Aksalla Putra",
+      "Anak Agung Istri Chandani Aura Pasha",
+      "Angela Elsa Shaniar Kusbiantoro",
+      "Ardia Wina Putri Suwarsono",
+      "Caesar Bagas Abdillah",
+      "Darma Dian Firmansyah",
+      "Farahdita Salsabila Zulkarnain",
+      "Fi Amanila Putri Kinanti",
+      "Fikri Aulia As Sa'adi",
+      "Fioreno Malvin Tandra",
+      "Garneta Nasywa Aurela Pranoto",
+      "Ghulam Faza Ahadan",
+      "Habibur Rachman Ali Akbar",
+      "Marsa Ajrina",
+      "Marvin Savio Zahir",
+      "Michelle Lea Amanda",
+      "Muhammad Azhar Aziz",
+      "Muhammad Ilhamuddin",
+      "Muhammad Ridho Utomo",
+      "Mukhammad Rounaq Inda Robbik",
+      "Najwa Azalia Zakhia Musthofa",
+      "Razan Zahid Ahmad",
+      "Said Alvan Zein Firjatullah Fachir",
+      "Samudera Timur",
+      "Yohanes Carolus Satria Bramantyo",
+    ],
+    E17: [
+      "Agas Ananta Wijaya",
+      "Aji Wahyu Iva Saputra",
+      "Akmal Zuhdi Nihara",
+      "Andika Insan Patria",
+      "Brendan Timothy Mannuel",
+      "Fatiha Lubna Assabirina",
+      "Fergrini Lefranzy Pattinasarany",
+      "Fitri Fatma Dewi",
+      "Hasna Auliya Aristawidya",
+      "Hera Dian Marssheila",
+      "Ida Bagus Made Khrisna Dharma Laksana",
+      "Iki Adfi Nur Mohamad",
+      "Irvansyah",
+      "Ismail Adrian Putra Yuniardi",
+      "Levy Andriyano",
+      "Muhammad Bagaskara Nataningrat",
+      "Muhammad Iqbal Andika Putra",
+      "Muhammad Irfan Almizan",
+      "Muhammad Khoirul Anwar",
+      "Muhammad Zaidan Hafsh Fawwaz",
+      "Rasya Farah Wicaksana",
+      "Rhanantya Relintang Putri Agung",
+      "Sella Nasrania",
+      "Tepy Lindia Nanta",
+      "Umi Royhanah",
+      "Valent Dita Wardoyo",
+    ],
+  };
+
+  // Ambil semua ID JOB yang sudah ada di REKAP JOB
+  const existingIds = targetSheet
+    .getRange(2, 1, targetSheet.getLastRow() - 1, 1)
+    .getValues()
+    .flat();
+
+  // Looping melalui semua source sheets
+  sourceSheets.forEach((sheetName) => {
+    const sheet = ss.getSheetByName(sheetName);
+    if (!sheet) {
+      throw new Error(`Sheet "${sheetName}" tidak ditemukan.`);
+    }
+    Logger.log(`Memproses sheet "${sheetName}"...`);
+
+    // Cari baris terakhir yang memiliki data di sheet sumber
+    const lastRow = sheet.getLastRow();
+
+    // Ambil semua data hingga baris terakhir
+    const data = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues(); // Mulai dari baris ke-2 untuk menghindari header
+
+    // Mulai membaca data
+    for (let i = 0; i < data.length; i++) {
+      const row = data[i];
+      const id = row[0]; // ID (foreign key)
+      const name = row[1]; // Nama kru
+
+      // Skip jika ID sudah ada di REKAP JOB
+      if (existingIds.includes(id)) {
+        Logger.log(`ID "${id}" pada baris ${i + 2} di sheet "${sheetName}" sudah ada. Lewat.`);
+        continue;
+      }
+
+      // Validasi nama kru
+      if (!name || typeof name !== "string" || name.trim() === "") {
+        Logger.log(`Baris ${i + 2} di sheet "${sheetName}" dilewatkan karena nama kru kosong.`);
+        continue;
+      }
+
+      // Tentukan angkatan berdasarkan nama kru
+      let angkatan = null;
+      for (const key in angkatanKru) {
+        if (angkatanKru[key].includes(name)) {
+          angkatan = key;
+          break;
+        }
+      }
+
+      if (!angkatan) {
+        Logger.log(`Nama kru "${name}" pada baris ${i + 2} di sheet "${sheetName}" tidak ditemukan dalam daftar angkatan.`);
+        continue; // Skip jika nama tidak ditemukan dalam daftar angkatan
+      }
+
+      // Tentukan baris awal untuk angkatan ini
+      let startRow = separators[angkatan] + 1;
+
+      // Geser pembatas angkatan berikutnya jika diperlukan
+      for (const nextAngkatan of Object.keys(separators).filter((k) => separators[k] > separators[angkatan])) {
+        separators[nextAngkatan]++;
+      }
+
+      // Tambahkan data ke sheet REKAP JOB
+      targetSheet.insertRowBefore(startRow);
+      targetSheet.getRange(startRow, 1, 1, 7).setValues([row.slice(0, 7)]);
+      targetSheet
+        .getRange(startRow, 8)
+        .setFormula(
+          `=ifna(VLOOKUP((CONCATENATE(F${startRow}:G${startRow}));Acuan!$I$2:$J$238;2;False);"0")`
+        );
+
+      Logger.log(`Menambahkan data ID "${id}" untuk kru "${name}" ke baris ${startRow} di angkatan ${angkatan}.`);
+
+      // Perbarui separator untuk angkatan ini
+      separators[angkatan]++;
+    }
+  });
+
+  // Hapus fungsi pengurutan
+  Logger.log("Proses selesai tanpa pengurutan.");
+}
+
+// 02. BUAT SHEET PERBULAN DAN DATA DIMASUKKAN BERDASARKAN TIME STAMP
+function transferDataToMonthlySheets() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sourceSheetName = "REKAP JOB";
+  const templateSheetName = "Template Bulan";
+
+  const monthNames = [
+    "JANUARI", "FEBRUARI", "MARET", "APRIL",
+    "MEI", "JUNI", "JULI", "AGUSTUS",
+    "SEPTEMBER", "OKTOBER", "NOVEMBER", "DESEMBER"// WAJIB DI UBAH SESUAI BULAN REKAP
+  ];
+
+  // Ambil sheet sumber (REKAP JOB)
+  const sourceSheet = ss.getSheetByName(sourceSheetName);
+  if (!sourceSheet) throw new Error(`Sheet "${sourceSheetName}" tidak ditemukan.`);
+
+  // Ambil semua data dari REKAP JOB
+  const data = sourceSheet.getDataRange().getValues();
+  const header = data[0];
+  const rows = data.slice(1); // Data tanpa header
+
+  // Cari indeks penting
+  const idIndex = header.indexOf("ID JOB");
+  const tanggalIndex = header.indexOf("Tanggal Masuk");
+  const namaKruIndex = header.indexOf("Nama Kru");
+  const programIndex = header.indexOf("Program");
+  const jobIndex = header.indexOf("Jenis JOB");
+  const poinIndex = header.indexOf("Poin"); // Kolom Poin (H)
+
+  if (idIndex === -1 || tanggalIndex === -1 || namaKruIndex === -1 || programIndex === -1 || jobIndex === -1) {
+    throw new Error("Kolom penting tidak ditemukan di REKAP JOB.");
+  }
+
+  Logger.log("Memulai pemindahan data...");
+
+  // Data per bulan
+  const monthlyData = {};
+
+  rows.forEach((row) => {
+    const tanggal = row[tanggalIndex];
+    if (!tanggal) return; // Lewati jika tanggal kosong
+
+    const dateObj = new Date(tanggal);
+    if (isNaN(dateObj)) return; // Lewati jika tanggal tidak valid
+
+    const month = dateObj.getMonth(); // Ambil indeks bulan (0 = Januari)
+    if (!monthlyData[month]) monthlyData[month] = []; // Inisialisasi array bulan jika belum ada
+
+    monthlyData[month].push(row); // Tambahkan data ke bulan yang sesuai
+  });
+
+  // Proses setiap bulan
+  Object.keys(monthlyData).forEach((monthIndex) => {
+    const month = parseInt(monthIndex);
+    const monthName = monthNames[month];
+
+    // Periksa apakah sheet bulan sudah ada, jika tidak, buat dari template
+    let monthSheet = ss.getSheetByName(monthName);
+    if (!monthSheet) {
+      const templateSheet = ss.getSheetByName(templateSheetName);
+      if (!templateSheet) {
+        throw new Error(`Template sheet "${templateSheetName}" tidak ditemukan.`);
+      }
+
+      monthSheet = templateSheet.copyTo(ss);
+      monthSheet.setName(monthName);
+      Logger.log(`Sheet "${monthName}" berhasil dibuat dari template.`);
+    }
+
+    // Ambil batas pemisah angkatan (E19, E18, E17) di sheet bulan
+    const separators = {
+      E20: monthSheet.createTextFinder("E20").findNext().getRow(),
+      E19: monthSheet.createTextFinder("E19").findNext().getRow(),
+      E18: monthSheet.createTextFinder("E18").findNext().getRow(),
+      E17: monthSheet.createTextFinder("E17").findNext().getRow(),
+    };
+
+    const angkatanKru = {
+      E20: [
+        "Adrian Maulana Syaval Putra Triar",
+        "Ahmad Nayottama Juliansyah",
+        "Aldymas Nauval Saputra",
+        "Amartha Kirania Cahaya Putri",
+        "Aqeela Chessa Nurcahyo",
+        "Athalia Qothrunnadah Nazhifah",
+        "Ayu Dwi Iko Sita",
+        "Caesar Ryan Ahmadyani",
+        "Daffa Rafidan Alim",
+        "Erlita Putri Febyanti",
+        "Farrel Aryasatya Raharjo",
+        "Ferlin Erdina Sari",
+        "Gahara Syahbani Limarianto Putra",
+        "Hanania Kirei Pintowantoro",
+        "Inayatul Zakiya Istiqomah",
+        "Izyankareem Retrofi Ranuwiehan",
+        "Janu Aisyah",
+        "Keanu Mikhail Farras Satriawan",
+        "Khilmi Ulin Nuha",
+        "KR.Raihan Narantaka Alief Wardana",
+        "Lubna Nuurillah Radiah Saraswati",
+        "Marvel Graziano Kunarwoko",
+        "Monix Denar Adistiyono",
+        "Muhammad Aymannafi",
+        "Muhammad Hafi Sulistyo",
+        "Muhammad Iqbal Lazuardi",
+        "Mulia Nirmalasari",
+        "Nabil Faiz Fadillah",
+        "Ni Luh Putu Raina Pradnya Pramesty",
+        "Rajendra Abrar Arganta Wibowo",
+        "Rayan Rajendra Rasendriya",
+        "Reynaldi Chandra",
+        "Roshelly Anggita Ramadhani",
+        "Sa’ad Musaid",
+        "Sagita Rizki Ramadhani",
+        "Valeksiano Sidjabat",
+        "Valencia Benita Adiana",
+        "Waldan Hafizh",
+        "Yesenia Valencia Wibowo",
+    ],
+    E19: [
+      "Abdul Fattah Ali",
+      "Alfin Hadi Komarudin",
+      "Ananda Fitri Wibowo",
+      "Andhika Putra Pratama",
+      "Arvina Nurul Firmala",
+      "Athira Zahra Adini",
+      "Axl Priyangga Maheswara",
+      "Chenata Andara Imansyah",
+      "Difta Raditya Pratama",
+      "Fakhri Rafif Fawwaz",
+      "Farid Nadi Al Farisi",
+      "Hafiz Arief",
+      "Ibrahim Ferel",
+      "Istianatul Latifah",
+      "Jylan Annisa Mumtaza Syidana",
+      "Khoirun Nisa",
+      "Muhammad Ardiansyah Tri WIbowo",
+      "Muhammad Imren Firdy Averouz",
+      "Nafis Nabila Karimani",
+      "Ni'mah Fauziyyah Atok",
+      "Novansyah Putra Ramadhani",
+      "Rayhan Agnan Kusuma",
+      "Razeh Nurebikasyahaq",
+      "Samuel Hideaki Tangke Arung",
+      "Sandy Prastyawan Nugraha",
+      "Tsany Deni Mahardika",
+    ],
+    E18: [
+      "Aiman Ahmad Oetarto",
+      "Akhmad Aksalla Putra",
+      "Anak Agung Istri Chandani Aura Pasha",
+      "Angela Elsa Shaniar Kusbiantoro",
+      "Ardia Wina Putri Suwarsono",
+      "Caesar Bagas Abdillah",
+      "Darma Dian Firmansyah",
+      "Farahdita Salsabila Zulkarnain",
+      "Fi Amanila Putri Kinanti",
+      "Fikri Aulia As Sa'adi",
+      "Fioreno Malvin Tandra",
+      "Garneta Nasywa Aurela Pranoto",
+      "Ghulam Faza Ahadan",
+      "Habibur Rachman Ali Akbar",
+      "Marsa Ajrina",
+      "Marvin Savio Zahir",
+      "Michelle Lea Amanda",
+      "Muhammad Azhar Aziz",
+      "Muhammad Ilhamuddin",
+      "Muhammad Ridho Utomo",
+      "Mukhammad Rounaq Inda Robbik",
+      "Najwa Azalia Zakhia Musthofa",
+      "Razan Zahid Ahmad",
+      "Said Alvan Zein Firjatullah Fachir",
+      "Samudera Timur",
+      "Yohanes Carolus Satria Bramantyo",
+    ],
+    E17: [
+      "Agas Ananta Wijaya",
+      "Aji Wahyu Iva Saputra",
+      "Akmal Zuhdi Nihara",
+      "Andika Insan Patria",
+      "Brendan Timothy Mannuel",
+      "Fatiha Lubna Assabirina",
+      "Fergrini Lefranzy Pattinasarany",
+      "Fitri Fatma Dewi",
+      "Hasna Auliya Aristawidya",
+      "Hera Dian Marssheila",
+      "Ida Bagus Made Khrisna Dharma Laksana",
+      "Iki Adfi Nur Mohamad",
+      "Irvansyah",
+      "Ismail Adrian Putra Yuniardi",
+      "Levy Andriyano",
+      "Muhammad Bagaskara Nataningrat",
+      "Muhammad Iqbal Andika Putra",
+      "Muhammad Irfan Almizan",
+      "Muhammad Khoirul Anwar",
+      "Muhammad Zaidan Hafsh Fawwaz",
+      "Rasya Farah Wicaksana",
+      "Rhanantya Relintang Putri Agung",
+      "Sella Nasrania",
+      "Tepy Lindia Nanta",
+      "Umi Royhanah",
+      "Valent Dita Wardoyo",
+    ],
+    };
+
+    // Ambil semua ID JOB yang sudah ada di sheet bulan
+    const lastRow = monthSheet.getLastRow();
+    const existingIds = new Set();
+    if (lastRow > 1) { // Jika ada data di sheet bulan
+      const idData = monthSheet.getRange(2, idIndex + 1, lastRow - 1, 1).getValues().flat();
+      idData.forEach((id) => existingIds.add(id));
+    }
+
+    // Ambil data bulan tersebut
+    const rowsForMonth = monthlyData[month];
+    rowsForMonth.forEach((row) => {
+      const idJob = row[idIndex];
+      if (!idJob || existingIds.has(idJob)) {
+        Logger.log(`ID JOB "${idJob}" sudah ada di sheet "${monthName}". Lewat.`);
+        return; // Lewati jika ID JOB kosong atau sudah ada
+      }
+
+      const namaKru = row[namaKruIndex];
+      if (!namaKru) return; // Lewati jika nama kru kosong
+
+      // Tentukan angkatan kru
+      let angkatan = null;
+      for (const key in angkatanKru) {
+        if (angkatanKru[key].includes(namaKru)) {
+          angkatan = key;
+          break;
+        }
+      }
+
+      if (!angkatan) return; // Lewati jika kru tidak ditemukan dalam daftar angkatan
+
+      // Tentukan baris awal untuk angkatan ini
+      let startRow = separators[angkatan] + 1;
+
+      // Geser pembatas angkatan berikutnya jika diperlukan
+      for (const nextAngkatan of Object.keys(separators).filter((k) => separators[k] > separators[angkatan])) {
+        separators[nextAngkatan]++;
+      }
+
+      // Tambahkan data ke sheet bulan
+      monthSheet.insertRowBefore(startRow);
+      monthSheet.getRange(startRow, 1, 1, row.length).setValues([row]);
+
+      // Tambahkan formula ke kolom Poin (H)
+      const poinFormula = `=ifna(VLOOKUP((CONCATENATE(F${startRow}:G${startRow}));Acuan!$I$2:$J$238;2;False);"0")`;
+      monthSheet.getRange(startRow, poinIndex + 1).setFormula(poinFormula);
+
+      Logger.log(`Data untuk ID JOB "${idJob}" dan kru "${namaKru}" ditambahkan ke sheet "${monthName}" di baris ${startRow}.`);
+
+      // Perbarui pembatas angkatan
+      separators[angkatan]++;
+    });
+  });
+
+  Logger.log("Proses pemindahan data selesai.");
+}
+
+// 03. SORTIR NAMA DAN TAMBAHKAN NAMA YANG TIDAK ADA ATAU JOB KOSONG
+function sortirNamaBerdasarkanAngkatanDanTambahkanNama() {
+  const sheetName = "DESEMBER"; // Nama sheet yang ingin diproses WAJIB UBAH
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(sheetName);
+
+  if (!sheet) {
+    throw new Error(`Sheet "${sheetName}" tidak ditemukan.`);
+  }
+
+  Logger.log(`Memulai proses sortir nama berdasarkan angkatan dan menambahkan nama yang hilang di sheet "${sheetName}"...`);
+
+  // Daftar nama kru per angkatan
+  const angkatanKru = {
+    E20: [
+      "Adrian Maulana Syaval Putra Triar",
+      "Ahmad Nayottama Juliansyah",
+      "Aldymas Nauval Saputra",
+      "Amartha Kirania Cahaya Putri",
+      "Aqeela Chessa Nurcahyo",
+      "Athalia Qothrunnadah Nazhifah",
+      "Ayu Dwi Iko Sita",
+      "Caesar Ryan Ahmadyani",
+      "Daffa Rafidan Alim",
+      "Erlita Putri Febyanti",
+      "Farrel Aryasatya Raharjo",
+      "Ferlin Erdina Sari",
+      "Gahara Syahbani Limarianto Putra",
+      "Hanania Kirei Pintowantoro",
+      "Inayatul Zakiya Istiqomah",
+      "Izyankareem Retrofi Ranuwiehan",
+      "Janu Aisyah",
+      "Keanu Mikhail Farras Satriawan",
+      "Khilmi Ulin Nuha",
+      "KR.Raihan Narantaka Alief Wardana",
+      "Lubna Nuurillah Radiah Saraswati",
+      "Marvel Graziano Kunarwoko",
+      "Monix Denar Adistiyono",
+      "Muhammad Aymannafi",
+      "Muhammad Hafi Sulistyo",
+      "Muhammad Iqbal Lazuardi",
+      "Mulia Nirmalasari",
+      "Nabil Faiz Fadillah",
+      "Ni Luh Putu Raina Pradnya Pramesty",
+      "Rajendra Abrar Arganta Wibowo",
+      "Rayan Rajendra Rasendriya",
+      "Reynaldi Chandra",
+      "Roshelly Anggita Ramadhani",
+      "Sa’ad Musaid",
+      "Sagita Rizki Ramadhani",
+      "Valeksiano Sidjabat",
+      "Valencia Benita Adiana",
+      "Waldan Hafizh",
+      "Yesenia Valencia Wibowo",
+    ],
+    E19: [
+      "Abdul Fattah Ali",
+      "Alfin Hadi Komarudin",
+      "Ananda Fitri Wibowo",
+      "Andhika Putra Pratama",
+      "Arvina Nurul Firmala",
+      "Athira Zahra Adini",
+      "Axl Priyangga Maheswara",
+      "Chenata Andara Imansyah",
+      "Difta Raditya Pratama",
+      "Fakhri Rafif Fawwaz",
+      "Farid Nadi Al Farisi",
+      "Hafiz Arief",
+      "Ibrahim Ferel",
+      "Istianatul Latifah",
+      "Jylan Annisa Mumtaza Syidana",
+      "Khoirun Nisa",
+      "Muhammad Ardiansyah Tri WIbowo",
+      "Muhammad Imren Firdy Averouz",
+      "Nafis Nabila Karimani",
+      "Ni'mah Fauziyyah Atok",
+      "Novansyah Putra Ramadhani",
+      "Rayhan Agnan Kusuma",
+      "Razeh Nurebikasyahaq",
+      "Samuel Hideaki Tangke Arung",
+      "Sandy Prastyawan Nugraha",
+      "Tsany Deni Mahardika",
+    ],
+    E18: [
+      "Aiman Ahmad Oetarto",
+      "Akhmad Aksalla Putra",
+      "Anak Agung Istri Chandani Aura Pasha",
+      "Angela Elsa Shaniar Kusbiantoro",
+      "Ardia Wina Putri Suwarsono",
+      "Caesar Bagas Abdillah",
+      "Darma Dian Firmansyah",
+      "Farahdita Salsabila Zulkarnain",
+      "Fi Amanila Putri Kinanti",
+      "Fikri Aulia As Sa'adi",
+      "Fioreno Malvin Tandra",
+      "Garneta Nasywa Aurela Pranoto",
+      "Ghulam Faza Ahadan",
+      "Habibur Rachman Ali Akbar",
+      "Marsa Ajrina",
+      "Marvin Savio Zahir",
+      "Michelle Lea Amanda",
+      "Muhammad Azhar Aziz",
+      "Muhammad Ilhamuddin",
+      "Muhammad Ridho Utomo",
+      "Mukhammad Rounaq Inda Robbik",
+      "Najwa Azalia Zakhia Musthofa",
+      "Razan Zahid Ahmad",
+      "Said Alvan Zein Firjatullah Fachir",
+      "Samudera Timur",
+      "Yohanes Carolus Satria Bramantyo",
+    ],
+    E17: [
+      "Agas Ananta Wijaya",
+      "Aji Wahyu Iva Saputra",
+      "Akmal Zuhdi Nihara",
+      "Andika Insan Patria",
+      "Brendan Timothy Mannuel",
+      "Fatiha Lubna Assabirina",
+      "Fergrini Lefranzy Pattinasarany",
+      "Fitri Fatma Dewi",
+      "Hasna Auliya Aristawidya",
+      "Hera Dian Marssheila",
+      "Ida Bagus Made Khrisna Dharma Laksana",
+      "Iki Adfi Nur Mohamad",
+      "Irvansyah",
+      "Ismail Adrian Putra Yuniardi",
+      "Levy Andriyano",
+      "Muhammad Bagaskara Nataningrat",
+      "Muhammad Iqbal Andika Putra",
+      "Muhammad Irfan Almizan",
+      "Muhammad Khoirul Anwar",
+      "Muhammad Zaidan Hafsh Fawwaz",
+      "Rasya Farah Wicaksana",
+      "Rhanantya Relintang Putri Agung",
+      "Sella Nasrania",
+      "Tepy Lindia Nanta",
+      "Umi Royhanah",
+      "Valent Dita Wardoyo",
+    ],
+  };
+
+  // Fungsi untuk menghitung ulang posisi pembatas angkatan
+  function getSeparators() {
+    return {
+      E20: sheet.createTextFinder("E20").findNext().getRow(),
+      E19: sheet.createTextFinder("E19").findNext().getRow(),
+      E18: sheet.createTextFinder("E18").findNext().getRow(),
+      E17: sheet.createTextFinder("E17").findNext().getRow(),
+    };
+  }
+
+  let separators = getSeparators(); // Hitung pembatas awal
+  Logger.log(`Batas angkatan ditemukan: ${JSON.stringify(separators)}`);
+
+  const angkatanKeys = Object.keys(separators); // Urutan angkatan
+
+  // Loop untuk setiap angkatan
+  for (let i = 0; i < angkatanKeys.length; i++) {
+    const currentAngkatan = angkatanKeys[i];
+    let startRow = separators[currentAngkatan] + 1; // Baris pertama di bawah pembatas angkatan
+    let endRow =
+      i + 1 < angkatanKeys.length
+        ? separators[angkatanKeys[i + 1]] - 1 // Hingga baris sebelum pembatas angkatan berikutnya
+        : sheet.getLastRow(); // Jika angkatan terakhir, sampai baris terakhir di sheet
+
+    Logger.log(`Memproses data untuk angkatan ${currentAngkatan}, dari baris ${startRow} hingga ${endRow}...`);
+
+    // Ambil data nama kru di rentang angkatan ini
+    const existingNames = sheet
+      .getRange(startRow, 2, endRow - startRow + 1) // Kolom "Nama Kru" (kolom B)
+      .getValues()
+      .flat()
+      .map((name) => name.trim())
+      .filter((name) => name !== ""); // Hilangkan nama kosong
+
+    Logger.log(`Nama yang sudah ada untuk angkatan ${currentAngkatan}: ${JSON.stringify(existingNames)}`);
+
+    // Cari nama yang belum ada
+    const missingNames = angkatanKru[currentAngkatan].filter((name) => !existingNames.includes(name));
+    Logger.log(`Nama yang hilang untuk angkatan ${currentAngkatan}: ${JSON.stringify(missingNames)}`);
+
+    // Tambahkan nama yang hilang ke sheet
+    missingNames.forEach((name) => {
+      sheet.insertRowBefore(startRow); // Tambahkan baris di atas
+      sheet.getRange(startRow, 2).setValue(name); // Isi kolom "Nama Kru" dengan nama yang hilang
+      startRow++; // Geser baris awal karena baris bertambah
+    });
+
+    // Urutkan ulang data di bawah pembatas angkatan ini
+    separators = getSeparators(); // Hitung ulang pembatas
+    startRow = separators[currentAngkatan] + 1; // Update baris awal
+    endRow =
+      i + 1 < angkatanKeys.length
+        ? separators[angkatanKeys[i + 1]] - 1
+        : sheet.getLastRow(); // Update baris akhir setelah penambahan
+    sheet
+      .getRange(startRow, 1, endRow - startRow + 1, sheet.getLastColumn()) // Rentang data
+      .sort({ column: 2, ascending: true }); // Sortir berdasarkan kolom Nama Kru (kolom 2)
+  }
+
+  Logger.log("Proses sortir nama dan penambahan nama selesai.");
+}
+
+// ---------------SUDAH REKAP GENERAL AFFAIR? LANJUT JIKA IYA---------------
+
+// 'KODE TERAKHIR' HANYA DIJALANKAN KETIKA DATA SUDAH TERCATAT DENGAN BENAR
+function totalkanPoinDanMergeNama() {
+  const sheetName = "SEPTEMBER"; // Nama sheet yang ingin diproses WAJIB UBAH
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(sheetName);
+
+  if (!sheet) {
+    throw new Error(`Sheet "${sheetName}" tidak ditemukan.`);
+  }
+
+  Logger.log(`Memulai proses penghitungan total poin dan merge nama di sheet "${sheetName}"...`);
+
+  const lastRow = sheet.getLastRow();
+  const lastColumn = sheet.getLastColumn();
+
+  if (lastRow <= 1) {
+    Logger.log("Tidak ada data untuk diproses.");
+    return;
+  }
+
+  // Ambil data pada sheet
+  const data = sheet.getRange(2, 1, lastRow - 1, lastColumn).getValues(); // Ambil semua data mulai baris kedua
+  const totalColumnIndex = 8; // Kolom "Total" ada pada kolom ke-9 (kolom I, zero-based index = 8)
+  const poinColumnIndex = 7; // Kolom "Poin" ada pada kolom ke-8 (kolom H, zero-based index = 7)
+  const namaColumnIndex = 1; // Kolom "Nama Kru" ada pada kolom ke-2 (kolom B, zero-based index = 1)
+
+  let startRow = 2; // Baris awal untuk proses (dimulai dari baris kedua)
+  let currentName = null; // Nama kru yang sedang diproses
+  let totalPoin = 0; // Total poin untuk nama kru yang sama
+  let isInGroup = false; // Indikator apakah kita sedang dalam grup nama kru
+
+  for (let i = 0; i < data.length; i++) {
+    const row = data[i];
+    const namaKru = row[namaColumnIndex];
+    const poin = parseFloat(row[poinColumnIndex]) || 0; // Ambil poin, jika kosong atau bukan angka, anggap 0
+
+    if (namaKru && typeof namaKru === "string" && namaKru.trim() !== "") {
+      // Jika nama kru valid (bukan pembatas atau baris aneh)
+      if (namaKru === currentName) {
+        // Jika nama kru sama dengan nama sebelumnya, tambahkan poin
+        totalPoin += poin;
+        isInGroup = true;
+      } else {
+        // Jika nama kru berbeda atau memulai nama baru
+        if (isInGroup) {
+          // Tulis total poin dan merge untuk grup sebelumnya
+          const numRows = i - (startRow - 2);
+          if (numRows > 0) {
+            sheet.getRange(startRow, totalColumnIndex + 1).setValue(totalPoin); // Tulis total poin
+            sheet.getRange(startRow, namaColumnIndex + 1, numRows, 1).merge(); // Merge nama kru
+            sheet.getRange(startRow, totalColumnIndex + 1, numRows, 1).merge(); // Merge total poin
+          }
+        }
+
+        // Reset untuk nama kru yang baru
+        currentName = namaKru;
+        startRow = i + 2; // Update baris awal untuk nama baru
+        totalPoin = poin; // Reset total poin
+        isInGroup = true;
+      }
+    } else {
+      // Jika baris aneh (pembatas atau baris kosong), lewati
+      if (isInGroup) {
+        // Tulis total poin dan merge untuk grup sebelumnya
+        const numRows = i - (startRow - 2);
+        if (numRows > 0) {
+          sheet.getRange(startRow, totalColumnIndex + 1).setValue(totalPoin); // Tulis total poin
+          sheet.getRange(startRow, namaColumnIndex + 1, numRows, 1).merge(); // Merge nama kru
+          sheet.getRange(startRow, totalColumnIndex + 1, numRows, 1).merge(); // Merge total poin
+        }
+      }
+
+      // Reset untuk grup berikutnya
+      currentName = null;
+      totalPoin = 0;
+      isInGroup = false;
+      startRow = i + 2; // Pindah ke baris berikutnya
+    }
+  }
+
+  // Tuliskan total poin untuk nama terakhir (jika ada)
+  if (isInGroup) {
+    const numRowsLastBlock = data.length - (startRow - 2); // Hitung jumlah baris untuk blok terakhir
+    if (numRowsLastBlock > 0) {
+      sheet.getRange(startRow, totalColumnIndex + 1).setValue(totalPoin); // Tulis total poin
+      sheet.getRange(startRow, namaColumnIndex + 1, numRowsLastBlock, 1).merge(); // Merge nama terakhir
+      sheet.getRange(startRow, totalColumnIndex + 1, numRowsLastBlock, 1).merge(); // Merge total poin terakhir
+    }
+  }
+
+  Logger.log("Proses penghitungan total poin dan merge nama selesai.");
+}
+
+// ---------------JIKA TERDAPAT TAMBAHAN DATA MANUAL, JALANKAN 'KODE TERAKHIR' KEMUDIAN LANJUT KODE DIBAWAH INI---------------
+
+// OPSIONAL, GUNAKAN INI JIKA INGIN TOTALKAN DAN MARGE ULANG
+function totalkanPoinDanMergeNamaAfter() {
+  const sheetName = "JANUARI"; // Nama sheet yang ingin diproses
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(sheetName);
+
+  if (!sheet) {
+    throw new Error(`Sheet "${sheetName}" tidak ditemukan.`);
+  }
+
+  Logger.log(`Memulai proses penghitungan total poin dan merge nama di sheet "${sheetName}"...`);
+
+  const lastRow = sheet.getLastRow();
+  const lastColumn = sheet.getLastColumn();
+
+  if (lastRow <= 1) {
+    Logger.log("Tidak ada data untuk diproses.");
+    return;
+  }
+
+  // Ambil data dari sheet
+  const data = sheet.getRange(2, 1, lastRow - 1, lastColumn).getValues(); // Ambil semua data mulai baris kedua
+  const namaColumnIndex = 1; // Kolom "Nama Kru" ada pada kolom ke-2 (kolom B, zero-based index = 1)
+  const poinColumnIndex = 7; // Kolom "Poin" ada pada kolom ke-8 (kolom H, zero-based index = 7)
+  const totalColumnIndex = 8; // Kolom "Total" ada pada kolom ke-9 (kolom I, zero-based index = 8)
+
+  let startRow = 2; // Baris awal untuk grup nama kru
+  let currentName = null; // Nama kru yang sedang diproses
+  let totalPoin = 0; // Total poin untuk nama kru yang sama
+
+  for (let i = 0; i < data.length; i++) {
+    const rowNumber = i + 2; // Baris di spreadsheet (1-based index)
+    let namaKruCell;
+
+    // Periksa apakah cell adalah bagian dari cell yang di-merge
+    const range = sheet.getRange(rowNumber, namaColumnIndex + 1);
+    if (range.isPartOfMerge()) {
+      // Jika cell di-merge, ambil nilai dari cell pertama di merge range
+      const mergedRange = range.getMergedRanges()[0];
+      namaKruCell = mergedRange.getCell(1, 1).getDisplayValue(); // Ambil nilai dari baris pertama
+    } else {
+      // Jika cell tidak di-merge, ambil nilai langsung
+      namaKruCell = range.getDisplayValue();
+    }
+
+    const poin = parseFloat(data[i][poinColumnIndex]) || 0; // Ambil poin, jika kosong atau bukan angka, anggap 0
+
+    // Abaikan baris pembatas (misalnya, jika cell kosong tapi di-merge)
+    if (namaKruCell.trim() === "") {
+      continue; // Lewati baris ini karena ini adalah pembatas
+    }
+
+    // Gunakan nama kru sebelumnya jika cell kosong karena merge
+    const namaKru = namaKruCell.trim() !== "" ? namaKruCell : currentName;
+
+    if (namaKru && namaKru !== currentName) {
+      // Jika nama kru baru ditemukan (atau memulai grup baru)
+      if (currentName) {
+        // Tulis total poin untuk grup sebelumnya
+        const numRows = i - (startRow - 2);
+        if (numRows > 0) {
+          sheet.getRange(startRow, totalColumnIndex + 1).setValue(totalPoin); // Tulis total poin di baris pertama grup
+          sheet.getRange(startRow, namaColumnIndex + 1, numRows, 1).merge(); // Merge nama kru
+          sheet.getRange(startRow, totalColumnIndex + 1, numRows, 1).merge(); // Merge total poin
+        }
+      }
+
+      // Reset untuk grup baru
+      currentName = namaKru;
+      totalPoin = poin;
+      startRow = rowNumber; // Baris awal untuk grup baru
+    } else {
+      // Jika nama kru sama, tambahkan poin
+      totalPoin += poin;
+    }
+  }
+
+  // Tulis total poin untuk grup terakhir
+  if (currentName) {
+    const numRowsLastBlock = data.length - (startRow - 2); // Hitung jumlah baris untuk blok terakhir
+    if (numRowsLastBlock > 0) {
+      sheet.getRange(startRow, totalColumnIndex + 1).setValue(totalPoin); // Tulis total poin
+      sheet.getRange(startRow, namaColumnIndex + 1, numRowsLastBlock, 1).merge(); // Merge nama kru terakhir
+      sheet.getRange(startRow, totalColumnIndex + 1, numRowsLastBlock, 1).merge(); // Merge total poin terakhir
+    }
+  }
+
+  Logger.log("Proses penghitungan total poin dan merge nama selesai.");
+}
